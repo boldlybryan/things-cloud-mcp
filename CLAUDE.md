@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 No linter configured. Run tests with `/usr/local/go/bin/go test ./...`. Verify build with `go build ./...`.
 
-Environment variables: `PORT` (default 8080), `JWT_SECRET` (base64, auto-generated if unset), `DATA_DIR` (default `data/`, for SQLite), `THINGS_DEBUG` (enables SDK debug logging).
+Environment variables: `PORT` (default 8080), `JWT_SECRET` (base64, auto-generated if unset), `ACCESS_TOKEN_TTL_SECONDS` (OAuth access-token lifetime; default `2592000` / 30 days), `DATA_DIR` (default `data/`, for SQLite), `THINGS_DEBUG` (enables SDK debug logging).
 
 ## Architecture
 
@@ -75,4 +75,4 @@ Worktree directory: `.claude/worktrees/`. Always create feature worktrees here.
 
 ## OAuth (oauth.go)
 
-OAuth 2.1 with PKCE. State persisted in SQLite (`DATA_DIR/oauth.db`): clients, auth codes, refresh tokens, JWT secret. Endpoints: `/authorize`, `/token`, `/register`, `/.well-known/oauth-*`.
+OAuth 2.1 with PKCE. Access tokens last 30 days by default (`ACCESS_TOKEN_TTL_SECONDS`). State persisted in SQLite (`DATA_DIR/oauth.db`): clients, auth codes, refresh tokens, JWT secret. Endpoints: `/authorize`, `/token`, `/register`, `/.well-known/oauth-*`.

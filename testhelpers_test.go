@@ -16,6 +16,17 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// Canonical Things identifiers for tests that commit. History.Write rejects
+// anything that does not decode to 16 bytes, including the short IDs this
+// server used to generate.
+const (
+	testAreaID     = "GwR4pBbswyBBSSCDZ6WkMu"
+	testTagID      = "H54AHxyV8dC1XiKjDaZ8vc"
+	testProjectID  = "HChFmkM6KHCqczTEt4bXVK"
+	testTaskID     = "HLLMFXihVwDfiGakYYdv42"
+	testEditTaskID = "HTySjK6JgbEVoYiGD2gJcj"
+)
+
 // ---------------------------------------------------------------------------
 // Fake Things Cloud HTTP server
 // ---------------------------------------------------------------------------

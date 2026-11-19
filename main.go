@@ -12,7 +12,6 @@ import (
 	"hash/crc32"
 	"hash/fnv"
 	"log"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -173,21 +172,14 @@ func defaultExtension() WireExtension {
 	return WireExtension{Sn: map[string]any{}, TypeTag: "oo"}
 }
 
+// generateUUID returns a canonical Base58 Things identifier. It delegates to
+// the SDK encoder, which preserves leading zero bytes. The encoder this
+// replaced dropped them, so about 1 in 255 new identifiers (UUIDv4 byte 0 ==
+// 0x00) came out short. Things.app cannot decode those and crashes in
+// BSIdentifierFromBase58String, and the poisoned history cannot be repaired
+// from the client.
 func generateUUID() string {
-	u := uuid.New()
-	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-	n := new(big.Int).SetBytes(u[:])
-	base := big.NewInt(58)
-	mod := new(big.Int)
-	var encoded []byte
-	for n.Sign() > 0 {
-		n.DivMod(n, base, mod)
-		encoded = append(encoded, alphabet[mod.Int64()])
-	}
-	for i, j := 0, len(encoded)-1; i < j; i, j = i+1, j-1 {
-		encoded[i], encoded[j] = encoded[j], encoded[i]
-	}
-	return string(encoded)
+	return thingscloud.NewUUID()
 }
 
 func nowTs() float64 {

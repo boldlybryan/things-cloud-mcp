@@ -263,6 +263,12 @@ func (h *History) Write(items ...Identifiable) error {
 		if item.UUID() == "" {
 			return fmt.Errorf("commit contains an item with an empty UUID")
 		}
+		// A non-canonical identifier permanently corrupts the sync history:
+		// Things.app crashes decoding it and the item cannot be removed
+		// afterwards. Refuse the whole commit before anything is sent.
+		if err := validateCommitIdentifiers(item); err != nil {
+			return err
+		}
 		if _, exists := m[item.UUID()]; exists {
 			return fmt.Errorf("commit contains duplicate UUID %q", item.UUID())
 		}
@@ -308,5 +314,90 @@ func (h *History) Write(items ...Identifiable) error {
 		return &CommitUncertainError{Err: fmt.Errorf("unexpected server head index %d after ancestor %d", w.ServerHeadIndex, h.LatestServerIndex)}
 	}
 	h.LatestServerIndex = w.ServerHeadIndex
+	return nil
+}
+
+// uuidReferenceFields are top-level payload keys that carry Things identifiers.
+// Nested objects are not walked: a repeater rule uses "ts" for a time shift,
+// which is not an identifier, while a checklist payload uses top-level "ts"
+// for the parent task.
+var uuidReferenceFields = map[string]struct{}{
+	"pr":    {}, // project
+	"ar":    {}, // area
+	"tg":    {}, // tags
+	"agr":   {}, // heading / action group
+	"rt":    {}, // recurrence template
+	"dl":    {}, // delegates
+	"ts":    {}, // checklist parent task
+	"pn":    {}, // parent tag
+	"dloid": {}, // tombstone target
+}
+
+// validateCommitIdentifiers refuses a commit item whose own UUID, or any UUID
+// it references, is not a canonical 16-byte Base58 identifier.
+func validateCommitIdentifiers(item Identifiable) error {
+	id := item.UUID()
+	if err := ValidateUUID(id); err != nil {
+		return fmt.Errorf("commit contains a non-canonical UUID %q: %w", id, err)
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return fmt.Errorf("commit item %s: %w", id, err)
+	}
+	var envelope struct {
+		Payload json.RawMessage `json:"p"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("commit item %s: %w", id, err)
+	}
+	if len(envelope.Payload) == 0 || string(envelope.Payload) == "null" {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return fmt.Errorf("commit item %s has a non-object payload: %w", id, err)
+	}
+	for field, rawField := range payload {
+		if _, ok := uuidReferenceFields[field]; !ok {
+			continue
+		}
+		if len(rawField) == 0 || string(rawField) == "null" {
+			continue
+		}
+		if err := validateUUIDField(id, field, rawField); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateUUIDField(itemID, field string, raw json.RawMessage) error {
+	switch raw[0] {
+	case '"':
+		var one string
+		if err := json.Unmarshal(raw, &one); err != nil {
+			return fmt.Errorf("commit item %s field %s: %w", itemID, field, err)
+		}
+		return validateReferencedUUID(itemID, field, one)
+	case '[':
+		var many []string
+		if err := json.Unmarshal(raw, &many); err != nil {
+			return fmt.Errorf("commit item %s field %s: %w", itemID, field, err)
+		}
+		for _, one := range many {
+			if err := validateReferencedUUID(itemID, field, one); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("commit item %s field %s is not a UUID or list of UUIDs", itemID, field)
+	}
+}
+
+func validateReferencedUUID(itemID, field, id string) error {
+	if err := ValidateUUID(id); err != nil {
+		return fmt.Errorf("commit contains a non-canonical UUID %q in %s of %s: %w", id, field, itemID, err)
+	}
 	return nil
 }

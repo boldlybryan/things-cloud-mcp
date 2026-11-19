@@ -55,7 +55,7 @@ func TestHistoryWriteRejectsMalformedCommitResponse(t *testing.T) {
 
 	c := New(server.URL, "test@example.com", "password")
 	h := &History{Client: c, ID: "history", LatestServerIndex: 7, LatestSchemaVersion: 301}
-	if err := h.Write(testIdentifiable{ID: "task-1", T: 1}); err == nil {
+	if err := h.Write(testIdentifiable{ID: "HbcYD6TusFFKtpqmsWihBS", T: 1}); err == nil {
 		t.Fatal("expected malformed response error")
 	}
 	if h.LatestServerIndex != 7 {

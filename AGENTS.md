@@ -18,6 +18,7 @@ Environment variables:
 - `PORT`: HTTP port.
 - `DATA_DIR`: SQLite and credential-key directory (default `data/`).
 - `JWT_SECRET`: base64 JWT signing key; generated when absent.
+- `ACCESS_TOKEN_TTL_SECONDS`: OAuth access-token lifetime for JWT `exp` and `expires_in` (default `2592000`, 30 days). Must be a positive integer; invalid or non-positive values fall back to the default so tokens are never minted without expiry.
 - `CREDENTIALS_SECRET`: durable high-entropy secret used to derive the AES key for Things passwords at rest. When absent, the server creates `DATA_DIR/credentials.key` with mode `0600`.
 - `THINGS_DEBUG`: SDK debug logging.
 

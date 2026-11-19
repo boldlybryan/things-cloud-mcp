@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,16 +27,22 @@ import (
 // OAuth 2.1 types
 // ---------------------------------------------------------------------------
 
+const (
+	accessTokenTTLEnv         = "ACCESS_TOKEN_TTL_SECONDS"
+	defaultAccessTokenTTLSecs = 2592000 // 30 days
+)
+
 type OAuthServer struct {
-	um            *UserManager
-	jwtSecret     []byte
-	credentialKey []byte
-	clients       map[string]*OAuthClient  // client_id -> client
-	authCodes     map[string]*AuthCode     // code -> auth code data
-	refreshTokens map[string]*RefreshToken // token -> refresh data
-	credentials   map[string]string        // email -> password (from successful authorizations)
-	db            *sql.DB                  // SQLite database
-	mu            sync.RWMutex
+	um             *UserManager
+	jwtSecret      []byte
+	credentialKey  []byte
+	accessTokenTTL time.Duration
+	clients        map[string]*OAuthClient  // client_id -> client
+	authCodes      map[string]*AuthCode     // code -> auth code data
+	refreshTokens  map[string]*RefreshToken // token -> refresh data
+	credentials    map[string]string        // email -> password (from successful authorizations)
+	db             *sql.DB                  // SQLite database
+	mu             sync.RWMutex
 }
 
 type OAuthClient struct {
@@ -111,12 +118,13 @@ func NewOAuthServer(um *UserManager, dataDir string) *OAuthServer {
 	}
 
 	o := &OAuthServer{
-		um:            um,
-		db:            db,
-		clients:       make(map[string]*OAuthClient),
-		authCodes:     make(map[string]*AuthCode),
-		refreshTokens: make(map[string]*RefreshToken),
-		credentials:   make(map[string]string),
+		um:             um,
+		db:             db,
+		accessTokenTTL: parseAccessTokenTTL(os.Getenv(accessTokenTTLEnv)),
+		clients:        make(map[string]*OAuthClient),
+		authCodes:      make(map[string]*AuthCode),
+		refreshTokens:  make(map[string]*RefreshToken),
+		credentials:    make(map[string]string),
 	}
 	credentialKey, err := loadOrCreateCredentialKey(db, dataDir)
 	if err != nil {
@@ -241,8 +249,8 @@ func NewOAuthServer(um *UserManager, dataDir string) *OAuthServer {
 		}
 	}
 
-	log.Printf("Loaded OAuth state: %d clients, %d refresh tokens, %d users",
-		len(o.clients), len(o.refreshTokens), len(o.credentials))
+	log.Printf("Loaded OAuth state: %d clients, %d refresh tokens, %d users, access token TTL %ds",
+		len(o.clients), len(o.refreshTokens), len(o.credentials), int64(o.accessTokenLifetime().Seconds()))
 
 	return o
 }
@@ -439,6 +447,39 @@ func writeJSONError(w http.ResponseWriter, status int, errCode, desc string) {
 // ---------------------------------------------------------------------------
 // Minimal JWT HS256 implementation
 // ---------------------------------------------------------------------------
+
+func parseAccessTokenTTL(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Duration(defaultAccessTokenTTLSecs) * time.Second
+	}
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seconds <= 0 {
+		log.Printf("Invalid %s=%q; using default %d", accessTokenTTLEnv, raw, defaultAccessTokenTTLSecs)
+		return time.Duration(defaultAccessTokenTTLSecs) * time.Second
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (o *OAuthServer) accessTokenLifetime() time.Duration {
+	if o != nil && o.accessTokenTTL > 0 {
+		return o.accessTokenTTL
+	}
+	return time.Duration(defaultAccessTokenTTLSecs) * time.Second
+}
+
+func (o *OAuthServer) newAccessToken(email, issuer string) (string, int64, error) {
+	ttl := o.accessTokenLifetime()
+	now := time.Now()
+	token, err := o.createJWT(map[string]any{
+		"sub":   email,
+		"iss":   issuer,
+		"exp":   now.Add(ttl).Unix(),
+		"iat":   now.Unix(),
+		"scope": "things:manage",
+	})
+	return token, int64(ttl / time.Second), err
+}
 
 func (o *OAuthServer) createJWT(claims map[string]any) (string, error) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
@@ -917,13 +958,7 @@ func (o *OAuthServer) handleAuthCodeGrant(w http.ResponseWriter, r *http.Request
 
 	// Generate tokens
 	base := getBaseURL(r)
-	accessToken, err := o.createJWT(map[string]any{
-		"sub":   email,
-		"iss":   base,
-		"exp":   time.Now().Add(1 * time.Hour).Unix(),
-		"iat":   time.Now().Unix(),
-		"scope": "things:manage",
-	})
+	accessToken, expiresIn, err := o.newAccessToken(email, base)
 	if err != nil {
 		o.mu.Lock()
 		ac.Used = false
@@ -958,7 +993,7 @@ func (o *OAuthServer) handleAuthCodeGrant(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  accessToken,
 		"token_type":    "Bearer",
-		"expires_in":    3600,
+		"expires_in":    expiresIn,
 		"refresh_token": refreshTok,
 		"scope":         "things:manage",
 	})
@@ -1003,13 +1038,7 @@ func (o *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 
 	// Generate new tokens
 	base := getBaseURL(r)
-	accessToken, err := o.createJWT(map[string]any{
-		"sub":   email,
-		"iss":   base,
-		"exp":   time.Now().Add(1 * time.Hour).Unix(),
-		"iat":   time.Now().Unix(),
-		"scope": "things:manage",
-	})
+	accessToken, expiresIn, err := o.newAccessToken(email, base)
 	if err != nil {
 		restoreOldToken()
 		writeJSONError(w, http.StatusInternalServerError, "server_error", "failed to create access token")
@@ -1040,7 +1069,7 @@ func (o *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  accessToken,
 		"token_type":    "Bearer",
-		"expires_in":    3600,
+		"expires_in":    expiresIn,
 		"refresh_token": newRefreshTok,
 		"scope":         "things:manage",
 	})
